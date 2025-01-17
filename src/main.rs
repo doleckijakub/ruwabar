@@ -13,13 +13,12 @@ use wayland_protocols_wlr::layer_shell::v1::client::*;
 fn main() {
     let mut client = Client::new();
 
-    client.add_bar(BarPosition::Top, 32, |mut canvas| {
+    client.add_bar(BarPosition::Top, 32, |canvas| {
         canvas.pixels.fill(0xFFCF4345u32);
     });
 
-    client.add_bar(BarPosition::Bottom, 32, |mut canvas| {
+    client.add_bar(BarPosition::Bottom, 32, |canvas| {
         canvas.pixels.fill(0xFF44848Cu32);
-        eprintln!("canvas.pixels[0] = {}", canvas.pixels[0]);
     });
 
     client.start();
@@ -67,12 +66,10 @@ enum BarPosition {
     Bottom,
 }
 
-type DrawOpFrom = Canvas;
-
 struct Bar {
     height: u32,
     position: BarPosition,
-    draw: Box<dyn Fn(Canvas) -> ()>,
+    draw: Box<dyn Fn(&mut Canvas) -> ()>,
 
     base_surface: wl_surface::WlSurface,
     layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
@@ -91,7 +88,7 @@ impl Bar {
         height: u32,
         draw: F,
         qh: &wayland_client::QueueHandle<State>,
-    ) -> Self where F: Fn(Canvas) -> () + 'static {
+    ) -> Self where F: Fn(&mut Canvas) -> () + 'static {
         let base_surface = compositor.create_surface(qh, ());
         let layer_surface = layer_shell.get_layer_surface(
             &base_surface,
@@ -175,7 +172,7 @@ impl Client {
         }
     }
 
-    fn add_bar<F: Fn(Canvas) -> () + 'static>(&mut self, position: BarPosition, height: u32, draw: F) {
+    fn add_bar<F: Fn(&mut Canvas) -> () + 'static>(&mut self, position: BarPosition, height: u32, draw: F) {
         let compositor = self
             .state
             .compositor
@@ -217,12 +214,12 @@ impl Client {
                     tmpfile
                 });
     
-                let canvas = bar.canvas.get_or_insert_with(|| {
+                let mut canvas = bar.canvas.get_or_insert_with(|| {
                     let background_color = 0xFF000000u32; // TODO: make configurable
                     Canvas::new(width, height, background_color)
                 });
     
-                (bar.draw)(canvas.clone());
+                (bar.draw)(&mut canvas);
     
                 let data = canvas.data();
                 tmpfile.write_all(bytemuck::cast_slice(&data)).unwrap();
@@ -254,7 +251,6 @@ impl Client {
         while self.state.running {
             self.event_queue.blocking_dispatch(&mut self.state).unwrap();
             self.render();
-            eprintln!("loopidaloop complete");
         }
     }
 }
