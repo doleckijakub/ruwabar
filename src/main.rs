@@ -1,5 +1,6 @@
 use std::{fs::File, os::unix::io::AsFd};
 use std::io::Write;
+use std::io::Seek;
 
 use wayland_client::{
     delegate_noop,
@@ -13,12 +14,15 @@ use wayland_protocols_wlr::layer_shell::v1::client::*;
 fn main() {
     let mut client = Client::new();
 
-    client.add_bar(BarPosition::Top, 32, |canvas| {
+    client.add_bar(BarPosition::Top, 40, |canvas| {
         canvas.pixels.fill(0xFFCF4345u32);
+        canvas.fill_rounded_rect(5, 5, 100, 30, 15, 0xFF181818);
+        canvas.fill_rounded_rect(10, 10, 90, 20, 10, 0xFFBA1245);
     });
 
-    client.add_bar(BarPosition::Bottom, 32, |canvas| {
+    client.add_bar(BarPosition::Bottom, 40, |canvas| {
         canvas.pixels.fill(0xFF44848Cu32);
+        canvas.draw_oval(5, 5, 30, 30, 0u32);
     });
 
     client.start();
@@ -27,8 +31,8 @@ fn main() {
 struct Canvas {
     width: u32,
     height: u32,
-    offset: u32, // in pixels not bytes
-    stride: u32, // in pixels not bytes
+    offset: u32, // in pixels, not bytes
+    stride: u32, // in pixels, not bytes
 
     pixels: Vec<u32>,
 
@@ -36,20 +40,184 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn new(width: u32, height: u32, background_color: u32) -> Self {
+    pub fn new(width: u32, height: u32, background_color: u32) -> Self {
         Self {
             width,
             height,
             offset: 0,
             stride: width,
-
             pixels: vec![background_color; (width * height) as usize],
-
             background_color,
         }
     }
 
-    fn data(&self) -> &Vec<u32> { &self.pixels }
+    pub fn data(&self) -> &Vec<u32> {
+        &self.pixels
+    }
+
+    pub fn set_pixel(&mut self, x: u32, y: u32, color: u32) {
+        if x < self.width && y < self.height {
+            self.pixels[(x + y * self.stride + self.offset) as usize] = color;
+        }
+    }
+
+    pub fn draw_rect(&mut self, x: u32, y: u32, width: u32, height: u32, color: u32) {
+        let x_end = x + width - 1;
+        let y_end = y + height - 1;
+
+        for px in x..=x_end {
+            self.set_pixel(px, y, color);
+            self.set_pixel(px, y_end, color);
+        }
+
+        for py in y..=y_end {
+            self.set_pixel(x, py, color);
+            self.set_pixel(x_end, py, color);
+        }
+    }
+
+    pub fn fill_rect(&mut self, x: u32, y: u32, width: u32, height: u32, color: u32) {
+        for j in y..y + height {
+            for i in x..x + width {
+                self.set_pixel(i, j, color);
+            }
+        }
+    }
+
+    pub fn draw_line(&mut self, x0: u32, y0: u32, x1: u32, y1: u32, color: u32) {
+        let dx = (x1 as i32 - x0 as i32).abs();
+        let dy = -(y1 as i32 - y0 as i32).abs();
+        let mut sx = if x0 < x1 { 1 } else { -1 };
+        let mut sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        let (mut x, mut y) = (x0 as i32, y0 as i32);
+
+        while x != x1 as i32 || y != y1 as i32 {
+            self.set_pixel(x as u32, y as u32, color);
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    pub fn draw_oval(&mut self, cx: u32, cy: u32, width: u32, height: u32, color: u32) {
+        let rx = width / 2;
+        let ry = height / 2;
+        let cx = cx + rx;
+        let cy = cy + ry;
+
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as i32 - rx as i32;
+                let dy = y as i32 - ry as i32;
+                if dx * dx * ry as i32 * ry as i32 + dy * dy * rx as i32 * rx as i32
+                    <= (rx * ry) as i32 * (rx * ry) as i32
+                {
+                    self.set_pixel(cx + dx as u32, cy + dy as u32, color);
+                }
+            }
+        }
+    }
+
+    pub fn fill_oval(&mut self, cx: u32, cy: u32, width: u32, height: u32, color: u32) {
+        let rx = width / 2;
+        let ry = height / 2;
+        let cx = cx + rx;
+        let cy = cy + ry;
+
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as i32 - rx as i32;
+                let dy = y as i32 - ry as i32;
+                if dx * dx * ry as i32 * ry as i32 + dy * dy * rx as i32 * rx as i32
+                    <= (rx * ry) as i32 * (rx * ry) as i32
+                {
+                    self.set_pixel(cx + dx as u32, cy + dy as u32, color);
+                }
+            }
+        }
+    }
+
+    pub fn draw_rounded_rect(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        arc_width: u32,
+        arc_height: u32,
+        color: u32,
+    ) {
+        self.draw_line(x + arc_width, y, x + width - arc_width, y, color);
+        self.draw_line(x + arc_width, y + height - 1, x + width - arc_width, y + height - 1, color);
+        self.draw_line(x, y + arc_height, x, y + height - arc_height, color);
+        self.draw_line(x + width - 1, y + arc_height, x + width - 1, y + height - arc_height, color);
+        self.set_pixel(x + arc_width - 1, y + arc_height - 1, color);
+        self.set_pixel(x + width - arc_width, y + arc_height - 1, color);
+        self.set_pixel(x + arc_width - 1, y + height - arc_height, color);
+        self.set_pixel(x + width - arc_width, y + height - arc_height, color);
+    }
+
+    pub fn fill_rounded_rect(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        radius: u32,
+        color: u32,
+    ) {
+        if radius == 0 {
+            self.fill_rect(x, y, width, height, color);
+            return;
+        }
+
+        let radius = radius.min(width / 2).min(height / 2);
+
+        self.fill_oval(x, y, radius * 2, radius * 2, color);
+        self.fill_oval(x + width - radius * 2, y, radius * 2, radius * 2, color);
+        self.fill_oval(x, y + height - radius * 2, radius * 2, radius * 2, color);
+        self.fill_oval(
+            x + width - radius * 2,
+            y + height - radius * 2,
+            radius * 2,
+            radius * 2,
+            color,
+        );
+
+        self.fill_rect(x + radius, y, width - radius * 2, radius, color);
+        self.fill_rect(
+            x + radius,
+            y + height - radius,
+            width - radius * 2,
+            radius,
+            color,
+        );
+
+        self.fill_rect(x, y + radius, radius, height - radius * 2, color);
+        self.fill_rect(
+            x + width - radius,
+            y + radius,
+            radius,
+            height - radius * 2,
+            color,
+        );
+
+        self.fill_rect(
+            x + radius,
+            y + radius,
+            width - radius * 2,
+            height - radius * 2,
+            color,
+        );
+    }
 }
 
 impl Clone for Canvas {
@@ -215,13 +383,14 @@ impl Client {
                 });
     
                 let mut canvas = bar.canvas.get_or_insert_with(|| {
-                    let background_color = 0xFF000000u32; // TODO: make configurable
+                    let background_color = 0xFF000000u32;
                     Canvas::new(width, height, background_color)
                 });
     
                 (bar.draw)(&mut canvas);
     
                 let data = canvas.data();
+                tmpfile.rewind().unwrap();
                 tmpfile.write_all(bytemuck::cast_slice(&data)).unwrap();
     
                 let shm_pool = bar.shm_pool.get_or_insert_with(|| {
