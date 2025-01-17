@@ -13,8 +13,8 @@ use wayland_protocols_wlr::layer_shell::v1::client::*;
 fn main() {
     let mut client = Client::new();
 
-    client.add_bar(BarPosition::Top, 32, || (255, 255, 0));
-    client.add_bar(BarPosition::Bottom, 32, || (0, 255, 255));
+    client.add_bar(BarPosition::Top, 32, || 0xFFFFFF00u32);
+    client.add_bar(BarPosition::Bottom, 32, || 0xFF00FFFFu32);
 
     client.start();
 }
@@ -27,6 +27,7 @@ enum BarPosition {
 struct Bar {
     height: u32,
     position: BarPosition,
+    draw: Box<dyn Fn() -> u32>,
 
     base_surface: wl_surface::WlSurface,
     layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
@@ -34,13 +35,14 @@ struct Bar {
 }
 
 impl Bar {
-    fn new(
+    fn new<F>(
         compositor: &wl_compositor::WlCompositor,
         layer_shell: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
         position: BarPosition,
         height: u32,
+        draw: F,
         qh: &wayland_client::QueueHandle<State>,
-    ) -> Self {
+    ) -> Self where F: Fn() -> u32 + 'static {
         let base_surface = compositor.create_surface(qh, ());
         let layer_surface = layer_shell.get_layer_surface(
             &base_surface,
@@ -66,6 +68,7 @@ impl Bar {
         Self {
             height,
             position,
+            draw: Box::new(draw),
 
             base_surface,
             layer_surface,
@@ -117,10 +120,7 @@ impl Client {
         }
     }
 
-    fn add_bar<F>(&mut self, position: BarPosition, height: u32, draw: F)
-    where
-        F: Fn() -> (u8, u8, u8),
-    {
+    fn add_bar<F: Fn() -> u32 + 'static>(&mut self, position: BarPosition, height: u32, draw: F) {
         let compositor = self
             .state
             .compositor
@@ -133,7 +133,14 @@ impl Client {
             .as_ref()
             .expect("Layer shell not initialized");
 
-        let bar = Bar::new(compositor, layer_shell, position, height, &self.qh);
+        let bar = Bar::new(
+            compositor,
+            layer_shell,
+            position,
+            height,
+            draw,
+            &self.qh
+        );
         self.bars.push(bar);
     }
 
@@ -150,7 +157,13 @@ impl Client {
                     tmpfile.set_len(size as u64).unwrap();
 
                     { // drawing
-                        let data = vec![0xFF000000u32 as i32; (width * height) as usize];
+                        let color = (bar.draw)();
+                        let data = vec![color as i32; (width * height) as usize];
+                        // for y in 0..height {
+                        //     for x in 0..width {
+                        //         data[(x + y * width) as usize] |= x as i32;
+                        //     }
+                        // }
                         tmpfile.write_all(bytemuck::cast_slice(&data)).unwrap();
                     }
 
