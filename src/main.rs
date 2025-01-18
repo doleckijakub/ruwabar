@@ -11,13 +11,20 @@ use wayland_protocols::xdg::shell::client::*;
 
 use wayland_protocols_wlr::layer_shell::v1::client::*;
 
+use fontdue::{Font, FontSettings};
+
 fn main() {
     let mut client = Client::new();
 
     client.add_bar(BarPosition::Top, 40, |canvas| {
         canvas.pixels.fill(0xFFCF4345u32);
+
         canvas.fill_rounded_rect(5, 5, 100, 30, 15, 0xFF181818);
         canvas.fill_rounded_rect(10, 10, 90, 20, 10, 0xFFBA1245);
+
+        let font = Font::from_bytes(include_bytes!("/usr/share/fonts/TTF/HackNerdFont-Regular.ttf") as &[u8], FontSettings::default()).unwrap();
+
+        canvas.draw_string(120, 30, "Hello, World!", 0xFF000000, &font, 20.0);
     });
 
     client.add_bar(BarPosition::Bottom, 40, |canvas| {
@@ -218,6 +225,80 @@ impl Canvas {
             color,
         );
     }
+
+    fn blend_pixel(&self, foreground: u32, background: u32, alpha: u32) -> u32 {
+        let fg_a = (foreground >> 24) & 0xFF; // Alpha
+        let fg_r = (foreground >> 16) & 0xFF; // Red
+        let fg_g = (foreground >> 8) & 0xFF;  // Green
+        let fg_b = foreground & 0xFF;         // Blue
+    
+        let bg_color = background;
+        let bg_a = (bg_color >> 24) & 0xFF;
+        let bg_r = (bg_color >> 16) & 0xFF;
+        let bg_g = (bg_color >> 8) & 0xFF;
+        let bg_b = bg_color & 0xFF;
+    
+        let alpha = alpha as f32 / 255.0;
+        let fg_alpha = fg_a as f32 / 255.0 * alpha;
+        let bg_alpha = bg_a as f32 / 255.0 * (1.0 - fg_alpha);
+    
+        let out_a = (fg_alpha + bg_alpha) * 255.0;
+    
+        let out_r = ((fg_r as f32 * fg_alpha + bg_r as f32 * bg_alpha) / (fg_alpha + bg_alpha)) as u32;
+        let out_g = ((fg_g as f32 * fg_alpha + bg_g as f32 * bg_alpha) / (fg_alpha + bg_alpha)) as u32;
+        let out_b = ((fg_b as f32 * fg_alpha + bg_b as f32 * bg_alpha) / (fg_alpha + bg_alpha)) as u32;
+    
+        ((out_a as u32) << 24) | ((out_r as u32) << 16) | ((out_g as u32) << 8) | out_b as u32
+    }
+    
+
+    pub fn draw_char(
+        &mut self,
+        x: u32,
+        y: u32,
+        c: char,
+        color: u32,
+        font: &Font,
+        size: f32,
+    ) {
+        let (metrics, bitmap) = font.rasterize(c, size);
+    
+        let baseline_offset = metrics.height as i32 + metrics.ymin;
+    
+        for row in 0..metrics.height {
+            for col in 0..metrics.width {
+                let pixel_x = x + col as u32;
+                let pixel_y = (y as i32 + row as i32 - baseline_offset) as u32;
+    
+                if pixel_x >= self.width || pixel_y < 0 || pixel_y as u32 >= self.height {
+                    continue;
+                }
+    
+                let alpha = bitmap[row * metrics.width + col] as u32;
+                if alpha > 0 {
+                    let blended_color = self.blend_pixel(color, self.pixels[(pixel_x + pixel_y * self.stride + self.offset) as usize], alpha);
+                    self.set_pixel(pixel_x, pixel_y as u32, blended_color);
+                }
+            }
+        }
+    }    
+
+    pub fn draw_string(
+        &mut self,
+        x: u32,
+        y: u32,
+        text: &str,
+        color: u32,
+        font: &Font,
+        size: f32,
+    ) {
+        let mut cursor_x = x;
+        for c in text.chars() {
+            let (metrics, _) = font.rasterize(c, size);
+            self.draw_char(cursor_x, y, c, color, font, size);
+            cursor_x += metrics.advance_width as u32;
+        }
+    }    
 }
 
 impl Clone for Canvas {
