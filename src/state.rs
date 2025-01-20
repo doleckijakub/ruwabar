@@ -1,17 +1,9 @@
-use std::{fs::File, os::unix::io::AsFd};
-use std::io::Write;
-use std::io::Seek;
-
 use wayland_client::{
     delegate_noop,
     protocol::*,
 };
 
-use wayland_protocols::xdg::shell::client::*;
-
 use wayland_protocols_wlr::layer_shell::v1::client::*;
-
-use fontdue::{Font, FontSettings};
 
 #[derive(Default)]
 pub struct State {

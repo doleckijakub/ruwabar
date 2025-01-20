@@ -1,20 +1,13 @@
 use crate::canvas::Canvas;
 use crate::state::State;
 
-use std::{fs::File, os::unix::io::AsFd};
-use std::io::Write;
-use std::io::Seek;
+use std::fs::File;
 
 use wayland_client::{
-    delegate_noop,
     protocol::*,
 };
 
-use wayland_protocols::xdg::shell::client::*;
-
 use wayland_protocols_wlr::layer_shell::v1::client::*;
-
-use fontdue::{Font, FontSettings};
 
 pub enum BarPosition {
     Top,
@@ -23,11 +16,9 @@ pub enum BarPosition {
 
 pub struct Bar {
     pub(crate) height: u32,
-    position: BarPosition,
     pub(crate) draw: Box<dyn Fn(&mut Canvas) -> ()>,
 
     pub(crate) base_surface: wl_surface::WlSurface,
-    layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
 
     pub(crate) tmpfile: Option<File>,
     pub(crate) canvas: Option<Canvas>,
@@ -68,11 +59,9 @@ impl Bar {
 
         Self {
             height,
-            position,
             draw: Box::new(draw),
 
             base_surface,
-            layer_surface,
             
             tmpfile: None,
             canvas: None,

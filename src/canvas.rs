@@ -1,29 +1,23 @@
-use std::{fs::File, os::unix::io::AsFd};
-use std::io::Write;
-use std::io::Seek;
+use std::sync::Arc;
+use std::sync::Mutex;
 
-use wayland_client::{
-    delegate_noop,
-    protocol::*,
-};
+use fontdue::Font;
 
-use wayland_protocols::xdg::shell::client::*;
+use crate::modules::*;
 
-use wayland_protocols_wlr::layer_shell::v1::client::*;
-
-use fontdue::{Font, FontSettings};
-
+#[derive(Debug)]
 pub struct Canvas {
     width: u32,
     height: u32,
     offset: u32, // in pixels, not bytes
     stride: u32, // in pixels, not bytes
 
-    pixels: Vec<u32>,
+    pub(crate) pixels: Arc<Mutex<Vec<u32>>>,
 
     background_color: u32,
 }
 
+#[allow(dead_code)]
 impl Canvas {
     pub fn new(width: u32, height: u32, background_color: u32) -> Self {
         Self {
@@ -31,18 +25,26 @@ impl Canvas {
             height,
             offset: 0,
             stride: width,
-            pixels: vec![background_color; (width * height) as usize],
+            pixels: Arc::new(Mutex::new(vec![background_color; (width * height) as usize])),
             background_color,
         }
     }
 
-    pub fn data(&self) -> &Vec<u32> {
-        &self.pixels
+    fn subcanvas(&self, x: u32, y: u32, width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            offset: x + y * self.stride + self.offset,
+            stride: self.stride,
+            pixels: self.pixels.clone(),
+            background_color: self.background_color,
+        }
     }
 
     pub fn set_pixel(&mut self, x: u32, y: u32, color: u32) {
         if x < self.width && y < self.height {
-            self.pixels[(x + y * self.stride + self.offset) as usize] = color;
+            let mut pixels = self.pixels.lock().unwrap();
+            pixels[(x + y * self.stride + self.offset) as usize] = color;
         }
     }
 
@@ -76,8 +78,8 @@ impl Canvas {
     pub fn draw_line(&mut self, x0: u32, y0: u32, x1: u32, y1: u32, color: u32) {
         let dx = (x1 as i32 - x0 as i32).abs();
         let dy = -(y1 as i32 - y0 as i32).abs();
-        let mut sx = if x0 < x1 { 1 } else { -1 };
-        let mut sy = if y0 < y1 { 1 } else { -1 };
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1 } else { -1 };
         let mut err = dx + dy;
 
         let (mut x, mut y) = (x0 as i32, y0 as i32);
@@ -107,7 +109,7 @@ impl Canvas {
                 let dx = x as i32 - rx as i32;
                 let dy = y as i32 - ry as i32;
                 if dx * dx * ry as i32 * ry as i32 + dy * dy * rx as i32 * rx as i32
-                    <= (rx * ry) as i32 * (rx * ry) as i32
+                    == (rx * ry) as i32 * (rx * ry) as i32
                 {
                     self.set_pixel(cx + dx as u32, cy + dy as u32, color);
                 }
@@ -252,14 +254,15 @@ impl Canvas {
                 let pixel_x = x + col as u32;
                 let pixel_y = (y as i32 + row as i32 - baseline_offset) as u32;
     
-                if pixel_x >= self.width || pixel_y < 0 || pixel_y as u32 >= self.height {
+                if pixel_x >= self.width || pixel_y as u32 >= self.height {
                     continue;
                 }
     
                 let alpha = bitmap[row * metrics.width + col] as u32;
                 if alpha > 0 {
-                    let blended_color = self.blend_pixel(color, self.pixels[(pixel_x + pixel_y * self.stride + self.offset) as usize], alpha);
-                    self.set_pixel(pixel_x, pixel_y as u32, blended_color);
+                    let mut pixels = self.pixels.lock().unwrap();
+                    let blended_color = self.blend_pixel(color, pixels.clone()[(pixel_x + pixel_y * self.stride + self.offset) as usize], alpha);
+                    pixels[(pixel_x + pixel_y * self.stride + self.offset) as usize] = blended_color; // self.set_pixel(pixel_x, pixel_y as u32, blended_color);
                 }
             }
         }
@@ -281,6 +284,23 @@ impl Canvas {
             cursor_x += metrics.advance_width as u32;
         }
     }    
+
+    pub fn draw_modules(&mut self, modules: &Modules, position: ModulePosition) {
+        match position {
+            ModulePosition::Left => {
+                let mut cursor_x = 0;
+                for module in &modules.modules {
+                    let width = module.get_width();
+                    let mut canvas = self.subcanvas(cursor_x, 0, width, self.height);
+                    
+                    module.draw(&mut canvas);
+
+                    cursor_x += width;
+                }
+            }
+            _ => unimplemented!()
+        }
+    }
 }
 
 impl Clone for Canvas {

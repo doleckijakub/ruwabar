@@ -2,25 +2,17 @@ use crate::state::State;
 use crate::canvas::Canvas;
 use crate::bar::{Bar, BarPosition};
 
-use std::{fs::File, os::unix::io::AsFd};
+use std::os::unix::io::AsFd;
 use std::io::Write;
 use std::io::Seek;
 
 use wayland_client::{
-    delegate_noop,
     protocol::*,
 };
-
-use wayland_protocols::xdg::shell::client::*;
-
-use wayland_protocols_wlr::layer_shell::v1::client::*;
-
-use fontdue::{Font, FontSettings};
 
 pub struct Client {
     state: State,
     
-    connection: wayland_client::Connection,
     event_queue: wayland_client::EventQueue<State>,
     qh: wayland_client::QueueHandle<State>,
 
@@ -45,7 +37,6 @@ impl Client {
 
         Self {
             state,
-            connection,
             event_queue,
             qh,
             bars: Vec::new(),
@@ -101,9 +92,9 @@ impl Client {
     
                 (bar.draw)(&mut canvas);
     
-                let data = canvas.data();
+                let data = canvas.pixels.lock().unwrap();
                 tmpfile.rewind().unwrap();
-                tmpfile.write_all(bytemuck::cast_slice(&data)).unwrap();
+                tmpfile.write_all(bytemuck::cast_slice(&data.clone())).unwrap();
     
                 let shm_pool = bar.shm_pool.get_or_insert_with(|| {
                     shm.create_pool(tmpfile.as_fd(), size as i32, &self.qh, ())
@@ -129,6 +120,9 @@ impl Client {
     }    
 
     pub fn start(&mut self) {
+        self.event_queue.blocking_dispatch(&mut self.state).unwrap();
+        self.render();
+
         while self.state.running {
             self.event_queue.blocking_dispatch(&mut self.state).unwrap();
             self.render();
